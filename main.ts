@@ -1,32 +1,38 @@
-// Gunakan Deno.serve() versi baru tanpa menentukan port
-// Aman untuk Deno Deploy
+// main.ts
+const ROBOFLOW_API_KEY = "rf_LgFcfZpNrOWgO2T1ZJF6S2lymp73"; // ganti API key kamu
+const ROBOFLOW_MODEL = "jentik-nyamuk-zoa3r";               // nama model kamu
+const ROBOFLOW_VERSION = "1";
+const FIREBASE_URL = "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
-const ROBOFLOW_API_KEY = "rf_LgFcfZpNrOWgO2T1ZJF6S2lymp73"; // ganti API Key Roboflow
-const ROBOFLOW_MODEL = "jentik-nyamuk-zoa3r";           
-const ROBOFLOW_VERSION = "1";                      
-const FIREBASE_URL = "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/";
-
+// === Server utama ===
 Deno.serve(async (req) => {
-  const { pathname } = new URL(req.url);
+  const url = new URL(req.url);
 
-  if (req.method === "POST" && pathname === "/api/detect") {
+  // Endpoint utama (test)
+  if (req.method === "GET" && url.pathname === "/") {
+    return new Response(
+      JSON.stringify({ message: "✅ Deno Deploy aktif!", usage: "POST /api/detect" }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Endpoint deteksi dari ESP32
+  if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
       const { imageUrl } = await req.json();
-
-      if (!imageUrl) {
-        return new Response(JSON.stringify({ error: "Missing imageUrl" }), {
+      if (!imageUrl)
+        return new Response(JSON.stringify({ error: "imageUrl kosong" }), {
           status: 400,
           headers: { "Content-Type": "application/json" },
         });
-      }
 
-      // kirim ke roboflow
+      // === Kirim ke Roboflow ===
       const detectUrl = `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}?api_key=${ROBOFLOW_API_KEY}&image=${encodeURIComponent(imageUrl)}`;
       const roboflowRes = await fetch(detectUrl);
       const roboflowData = await roboflowRes.json();
 
-      // simpan hasil ke Firebase RTDB
-      await fetch(`${FIREBASE_URL}/detections.json`, {
+      // === Kirim hasil ke Firebase ===
+      await fetch(FIREBASE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -36,23 +42,18 @@ Deno.serve(async (req) => {
         }),
       });
 
-      return new Response(JSON.stringify({ success: true, roboflowData }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ success: true, roboflowData }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: err.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
   }
 
-  // untuk akses GET (tes API)
-  return new Response(
-    JSON.stringify({
-      message: "✅ ESP32 Detection API Active",
-      usage: "POST /api/detect dengan body { imageUrl: 'https://...' }",
-    }),
-    { headers: { "Content-Type": "application/json" } },
-  );
+  // Endpoint selain itu
+  return new Response("404 Not Found", { status: 404 });
 });
