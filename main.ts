@@ -32,22 +32,14 @@ Deno.serve(async (req) => {
       const roboflowData = await roboflowRes.json();
 
       // === Kirim hasil ke Firebase ===
-      // === kirim ke Firebase RTDB ===
-      await fetch(`${FIREBASE_URL}/detections.json`, {
-         method: "POST",
+       // === Kirim hasil ke Firebase ===
+      await fetch(FIREBASE_URL, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageUrl,
           detection: roboflowData,
-          detected_class:
-            roboflowData.predictions && roboflowData.predictions.length > 0
-            ? roboflowData.predictions[0].class
-            : "Tidak terdeteksi",
-          confidence:
-        roboflowData.predictions && roboflowData.predictions.length > 0
-          ? roboflowData.predictions[0].confidence
-          : 0,
-        timestamp: new Date().toISOString(),
+          timestamp: Date.now(),
         }),
       });
 
