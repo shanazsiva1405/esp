@@ -1,6 +1,6 @@
 // main.ts
-const ROBOFLOW_API_KEY = "tE41bmQTqJ8zKAmXErjA"; // ganti API key kamu
-const ROBOFLOW_MODEL = "jentik-nyamuk-zoa3r";               // nama model kamu
+const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg"; // ganti API key kamu
+const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";               // nama model kamu
 const ROBOFLOW_VERSION = "1";
 const FIREBASE_URL = "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
