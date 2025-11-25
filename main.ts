@@ -1,16 +1,16 @@
 // main.ts (Deno)
 
-const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg";          // <= ganti punya kamu
-const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";           // <= nama model
+const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg";
+const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";
 const ROBOFLOW_VERSION = "1";
 
-// Firebase RTDB endpoint (node "detections")
+// Firebase RTDB endpoint
 const FIREBASE_URL =
   "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
 // Cloudinary
 const CLOUD_NAME = "dnm25bwiu";
-const UPLOAD_PRESET = "unsigned_preset";                  // <= preset unsigned
+const UPLOAD_PRESET = "unsigned_preset";
 const CLOUDINARY_URL =
   `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
 
@@ -41,9 +41,7 @@ async function uploadToCloudinary(imageBuffer: Uint8Array): Promise<string> {
 
   const res = await fetch(CLOUDINARY_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    },
+    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
     body,
   });
 
@@ -72,7 +70,6 @@ async function detectWithRoboflow(imageBuffer: Uint8Array) {
   const txt = await res.text();
   console.log("Roboflow raw response:", txt);
 
-  // Cek dulu apakah kemungkinan besar JSON (misal diawali `{` atau `[`)
   const trimmed = txt.trim();
   if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
     console.error("Respon Roboflow bukan JSON:", txt);
@@ -87,12 +84,11 @@ async function detectWithRoboflow(imageBuffer: Uint8Array) {
   try {
     const data = JSON.parse(trimmed);
     return data;
-  } catch (e) {
+  } catch (_e) {
     console.error("Gagal parse JSON Roboflow:", txt);
     throw new Error("Response Roboflow bukan JSON valid");
   }
 }
-
 
 // ========= HTTP Server =========
 Deno.serve(async (req) => {
@@ -125,10 +121,10 @@ Deno.serve(async (req) => {
       const arrayBuffer = await file.arrayBuffer();
       const imageBuffer = new Uint8Array(arrayBuffer);
 
-      // 1) Deteksi di Roboflow (pakai binary)
+      // 1) Deteksi di Roboflow
       const roboflowData = await detectWithRoboflow(imageBuffer);
 
-      // 2) Upload gambar asli ke Cloudinary
+      // 2) Upload gambar ke Cloudinary
       const imageUrl = await uploadToCloudinary(imageBuffer);
 
       // 3) Simpan hasil ke Firebase RTDB
@@ -143,11 +139,7 @@ Deno.serve(async (req) => {
       });
 
       return new Response(
-        JSON.stringify({
-          success: true,
-          imageUrl,
-          detection: roboflowData,
-        }),
+        JSON.stringify({ success: true, imageUrl, detection: roboflowData }),
         { headers: { "Content-Type": "application/json" } },
       );
     } catch (err) {
@@ -159,65 +151,66 @@ Deno.serve(async (req) => {
     }
   }
 
-  // === Endpoint lama /api/detect: jika kirim imageUrl, masih bisa dipakai ===
-  // endpoint lama /api/detect masih boleh dipakai kalau dari tempat lain kirim imageUrl
-if (req.method === "POST" && url.pathname === "/api/detect") {
-  try {
-    const { imageUrl } = await req.json();
-    if (!imageUrl) {
-      return new Response(
-        JSON.stringify({ error: "imageUrl kosong" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
-    }
-
-    const detectUrl =
-      `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
-      `?api_key=${ROBOFLOW_API_KEY}&image=${encodeURIComponent(imageUrl)}&format=json`;
-
-    const roboflowRes = await fetch(detectUrl);
-    const txt = await roboflowRes.text();
-    console.log("Roboflow /api/detect raw response:", txt);
-
-    if (!roboflowRes.ok) {
-      return new Response(
-        JSON.stringify({ error: "Roboflow tidak OK", detail: txt }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
-      );
-    }
-
-    let roboflowData;
+  // === Endpoint lama /api/detect (pakai imageUrl) ===
+  if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
-      roboflowData = JSON.parse(txt);
-    } catch (_e) {
-      console.error("Gagal parse JSON Roboflow di /api/detect:", txt);
+      const { imageUrl } = await req.json();
+      if (!imageUrl) {
+        return new Response(
+          JSON.stringify({ error: "imageUrl kosong" }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      const detectUrl =
+        `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
+        `?api_key=${ROBOFLOW_API_KEY}&image=${encodeURIComponent(imageUrl)}&format=json`;
+
+      const roboflowRes = await fetch(detectUrl);
+      const txt = await roboflowRes.text();
+      console.log("Roboflow /api/detect raw response:", txt);
+
+      if (!roboflowRes.ok) {
+        return new Response(
+          JSON.stringify({ error: "Roboflow tidak OK", detail: txt }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      let roboflowData;
+      try {
+        roboflowData = JSON.parse(txt);
+      } catch (_e) {
+        console.error("Gagal parse JSON Roboflow di /api/detect:", txt);
+        return new Response(
+          JSON.stringify({ error: "Response Roboflow bukan JSON valid" }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      await fetch(FIREBASE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUrl,
+          detection: roboflowData,
+          timestamp: Date.now(),
+        }),
+      });
+
       return new Response(
-        JSON.stringify({ error: "Response Roboflow bukan JSON valid" }),
+        JSON.stringify({ success: true, roboflowData }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    } catch (err) {
+      console.error("Error di /api/detect:", err);
+      return new Response(
+        JSON.stringify({ error: String(err) }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
-
-    await fetch(FIREBASE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        imageUrl,
-        detection: roboflowData,
-        timestamp: Date.now(),
-      }),
-    });
-
-    return new Response(
-      JSON.stringify({ success: true, roboflowData }),
-      { headers: { "Content-Type": "application/json" } },
-    );
-  } catch (err) {
-    console.error("Error di /api/detect:", err);
-    return new Response(
-      JSON.stringify({ error: String(err) }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
   }
-}
 
-
+  // fallback 404
+  return new Response("404 Not Found", { status: 404 });
+});
