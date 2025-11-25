@@ -168,26 +168,43 @@ Deno.serve(async (req) => {
 
       const roboflowRes = await fetch(detectUrl);
       const txt = await roboflowRes.text();
-      console.log("Roboflow /api/detect raw response:", txt);
 
-      if (!roboflowRes.ok) {
-        return new Response(
-          JSON.stringify({ error: "Roboflow tidak OK", detail: txt }),
-          { status: 500, headers: { "Content-Type": "application/json" } },
-        );
-      }
+// CETAK RAW RESPONSE SEBELUM PARSING
+console.log("===== RAW RESPONSE ROBOFLOW =====");
+console.log(txt);
+console.log("=================================");
 
-      let roboflowData;
-      try {
-        roboflowData = JSON.parse(txt);
-      } catch (_e) {
-        console.error("Gagal parse JSON Roboflow di /api/detect:", txt);
-        return new Response(
-          JSON.stringify({ error: "Response Roboflow bukan JSON valid" }),
-          { status: 500, headers: { "Content-Type": "application/json" } },
-        );
-      }
+// Jika respon kosong / bukan JSON sama sekali
+if (!txt || txt.trim() === "") {
+  console.error("Roboflow mengirim respon kosong");
+  return new Response(JSON.stringify({
+    error: "Roboflow kosong",
+    detail: txt
+  }), { status: 500 });
+}
 
+// Jika Roboflow memberi HTML error (sering terjadi)
+if (txt.trim().startsWith("<")) {
+  console.error("Roboflow kirim HTML error, bukan JSON:", txt);
+  return new Response(JSON.stringify({
+    error: "Roboflow HTML error",
+    detail: txt
+  }), { status: 500 });
+}
+
+// Jika OK, baru parsing
+let roboflowData;
+try {
+  roboflowData = JSON.parse(txt);
+} catch (e) {
+  console.error("GAGAL PARSE JSON:", txt);
+  return new Response(JSON.stringify({
+    error: "JSON parse error",
+    detail: txt
+  }), { status: 500 });
+}
+
+      
       await fetch(FIREBASE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
