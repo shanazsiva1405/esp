@@ -1,20 +1,20 @@
 // main.ts (Deno)
 
-const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg";
-const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";
+const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg";          // <= ganti punya kamu
+const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";           // <= nama model
 const ROBOFLOW_VERSION = "1";
 
-// Firebase RTDB endpoint
+// Firebase RTDB endpoint (node "detections")
 const FIREBASE_URL =
   "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
 // Cloudinary
 const CLOUD_NAME = "dnm25bwiu";
-const UPLOAD_PRESET = "unsigned_preset";
+const UPLOAD_PRESET = "unsigned_preset";                  // <= preset unsigned
 const CLOUDINARY_URL =
   `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
 
-// Helper: upload buffer ke Cloudinary, return secure_url
+// ========= Helper: Upload buffer ke Cloudinary =========
 async function uploadToCloudinary(imageBuffer: Uint8Array): Promise<string> {
   const boundary = "----DenoBoundary" + crypto.randomUUID();
   const encoder = new TextEncoder();
@@ -32,7 +32,6 @@ async function uploadToCloudinary(imageBuffer: Uint8Array): Promise<string> {
   const headBytes = encoder.encode(head);
   const tailBytes = encoder.encode(tail);
 
-  // gabung: head + binary + tail
   const body = new Uint8Array(
     headBytes.length + imageBuffer.length + tailBytes.length,
   );
@@ -58,7 +57,7 @@ async function uploadToCloudinary(imageBuffer: Uint8Array): Promise<string> {
   return data.secure_url as string;
 }
 
-// Helper: panggil Roboflow pakai buffer image
+// ========= Helper: Kirim gambar ke Roboflow (binary) =========
 async function detectWithRoboflow(imageBuffer: Uint8Array) {
   const url =
     `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
@@ -66,8 +65,10 @@ async function detectWithRoboflow(imageBuffer: Uint8Array) {
 
   const res = await fetch(url, {
     method: "POST",
-    // Coba tanpa header dulu, kalau mau pakai:
-    // headers: { "Content-Type": "application/octet-stream" },
+    // banyak contoh Roboflow pakai application/octet-stream atau tanpa header
+    headers: {
+      "Content-Type": "application/octet-stream",
+    },
     body: imageBuffer,
   });
 
@@ -88,14 +89,11 @@ async function detectWithRoboflow(imageBuffer: Uint8Array) {
   }
 }
 
-
-// (opsional) kalau kamu mau minta Roboflow balikin gambar yang sudah dibox,
-// biasanya endpoint-nya pakai format=image, tapi seringnya dari URL.
-// Di sini dulu kita pakai json + simpan hasil ke RTDB, gambar asli tetap dari Cloudinary.
-
+// ========= HTTP Server =========
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
+  // Cek hidup
   if (req.method === "GET" && url.pathname === "/") {
     return new Response(
       JSON.stringify({
@@ -106,7 +104,7 @@ Deno.serve(async (req) => {
     );
   }
 
-  // === ENDPOINT BARU UNTUK ESP32: /api/upload ===
+  // === Endpoint utama dari ESP32: /api/upload (multipart/form-data) ===
   if (req.method === "POST" && url.pathname === "/api/upload") {
     try {
       const formData = await req.formData();
@@ -122,13 +120,13 @@ Deno.serve(async (req) => {
       const arrayBuffer = await file.arrayBuffer();
       const imageBuffer = new Uint8Array(arrayBuffer);
 
-      // 1) Deteksi di Roboflow
+      // 1) Deteksi di Roboflow (pakai binary)
       const roboflowData = await detectWithRoboflow(imageBuffer);
 
-      // 2) Upload gambar ke Cloudinary
+      // 2) Upload gambar asli ke Cloudinary
       const imageUrl = await uploadToCloudinary(imageBuffer);
 
-      // 3) Simpan hasil + URL ke Firebase RTDB
+      // 3) Simpan hasil ke Firebase RTDB
       await fetch(FIREBASE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -156,7 +154,7 @@ Deno.serve(async (req) => {
     }
   }
 
-  // endpoint lama /api/detect masih boleh dipakai kalau dari tempat lain kirim imageUrl
+  // === Endpoint lama /api/detect: jika kirim imageUrl, masih bisa dipakai ===
   if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
       const { imageUrl } = await req.json();
@@ -169,10 +167,9 @@ Deno.serve(async (req) => {
 
       const detectUrl =
         `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}?api_key=${ROBOFLOW_API_KEY}&image=${
-          encodeURIComponent(
-            imageUrl,
-          )
+          encodeURIComponent(imageUrl)
         }`;
+
       const roboflowRes = await fetch(detectUrl);
       const roboflowData = await roboflowRes.json();
 
@@ -191,6 +188,7 @@ Deno.serve(async (req) => {
         { headers: { "Content-Type": "application/json" } },
       );
     } catch (err) {
+      console.error("Error di /api/detect:", err);
       return new Response(
         JSON.stringify({ error: String(err) }),
         { status: 500, headers: { "Content-Type": "application/json" } },
