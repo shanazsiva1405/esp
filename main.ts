@@ -153,14 +153,30 @@ Deno.serve(async (req) => {
 
   // === Endpoint lama /api/detect (pakai imageUrl) ===
   if (req.method === "POST" && url.pathname === "/api/detect") {
+   try {
+    const raw = await req.text();   // <-- ambil mentah dulu
+    console.log("===== RAW INPUT FROM CLIENT =====");
+    console.log(raw);
+    console.log("=================================");
+
+    let body;
     try {
-      const { imageUrl } = await req.json();
-      if (!imageUrl) {
-        return new Response(
-          JSON.stringify({ error: "imageUrl kosong" }),
-          { status: 400, headers: { "Content-Type": "application/json" } },
-        );
-      }
+      body = JSON.parse(raw);      // parse manual
+    } catch (err) {
+      console.error("JSON parse error:", err);
+      return new Response(JSON.stringify({
+        error: "Body bukan JSON valid",
+        raw
+      }), { status: 400 });
+    }
+
+    const imageUrl = body.imageUrl;
+    if (!imageUrl) {
+      return new Response(JSON.stringify({
+        error: "imageUrl tidak ditemukan",
+        raw
+      }), { status: 400 });
+    }
 
       const detectUrl =
         `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
