@@ -160,46 +160,63 @@ Deno.serve(async (req) => {
   }
 
   // === Endpoint lama /api/detect: jika kirim imageUrl, masih bisa dipakai ===
-  if (req.method === "POST" && url.pathname === "/api/detect") {
-    try {
-      const { imageUrl } = await req.json();
-      if (!imageUrl) {
-        return new Response(
-          JSON.stringify({ error: "imageUrl kosong" }),
-          { status: 400, headers: { "Content-Type": "application/json" } },
-        );
-      }
-
-      const detectUrl =
-        `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}?api_key=${ROBOFLOW_API_KEY}&image=${
-          encodeURIComponent(imageUrl)
-        }`;
-
-      const roboflowRes = await fetch(detectUrl);
-      const roboflowData = await roboflowRes.json();
-
-      await fetch(FIREBASE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          detection: roboflowData,
-          timestamp: Date.now(),
-        }),
-      });
-
+  // endpoint lama /api/detect masih boleh dipakai kalau dari tempat lain kirim imageUrl
+if (req.method === "POST" && url.pathname === "/api/detect") {
+  try {
+    const { imageUrl } = await req.json();
+    if (!imageUrl) {
       return new Response(
-        JSON.stringify({ success: true, roboflowData }),
-        { headers: { "Content-Type": "application/json" } },
+        JSON.stringify({ error: "imageUrl kosong" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
-    } catch (err) {
-      console.error("Error di /api/detect:", err);
+    }
+
+    const detectUrl =
+      `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
+      `?api_key=${ROBOFLOW_API_KEY}&image=${encodeURIComponent(imageUrl)}&format=json`;
+
+    const roboflowRes = await fetch(detectUrl);
+    const txt = await roboflowRes.text();
+    console.log("Roboflow /api/detect raw response:", txt);
+
+    if (!roboflowRes.ok) {
       return new Response(
-        JSON.stringify({ error: String(err) }),
+        JSON.stringify({ error: "Roboflow tidak OK", detail: txt }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
-  }
 
-  return new Response("404 Not Found", { status: 404 });
-});
+    let roboflowData;
+    try {
+      roboflowData = JSON.parse(txt);
+    } catch (_e) {
+      console.error("Gagal parse JSON Roboflow di /api/detect:", txt);
+      return new Response(
+        JSON.stringify({ error: "Response Roboflow bukan JSON valid" }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    await fetch(FIREBASE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageUrl,
+        detection: roboflowData,
+        timestamp: Date.now(),
+      }),
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, roboflowData }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  } catch (err) {
+    console.error("Error di /api/detect:", err);
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
+}
+
