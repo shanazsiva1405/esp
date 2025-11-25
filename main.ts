@@ -152,97 +152,45 @@ Deno.serve(async (req) => {
   }
 
   // === Endpoint lama /api/detect (pakai imageUrl) ===
-  if (req.method === "POST" && url.pathname === "/api/detect") {
-   try {
-    const raw = await req.text();   // <-- ambil mentah dulu
-    console.log("===== RAW INPUT FROM CLIENT =====");
-    console.log(raw);
-    console.log("=================================");
+if (req.method === "POST" && url.pathname === "/api/detect") {
+  try {
+    const form = await req.formData();
+    const file = form.get("file");
 
-    let body;
-    try {
-      body = JSON.parse(raw);      // parse manual
-    } catch (err) {
-      console.error("JSON parse error:", err);
+    if (!file) {
       return new Response(JSON.stringify({
-        error: "Body bukan JSON valid",
-        raw
+        error: "File tidak ditemukan dalam form-data",
       }), { status: 400 });
     }
 
-    const imageUrl = body.imageUrl;
-    if (!imageUrl) {
-      return new Response(JSON.stringify({
-        error: "imageUrl tidak ditemukan",
-        raw
-      }), { status: 400 });
-    }
+    // baca file menjadi buffer
+    const arrayBuffer = await file.arrayBuffer();
+    const fileBytes = new Uint8Array(arrayBuffer);
 
-      const detectUrl =
-        `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
-        `?api_key=${ROBOFLOW_API_KEY}&image=${encodeURIComponent(imageUrl)}&format=json`;
+    console.log("Received file from ESP32:", file.name, "size:", fileBytes.length);
 
-      const roboflowRes = await fetch(detectUrl);
-      const txt = await roboflowRes.text();
+    // upload ke Roboflow
+    const roboflowRes = await fetch("https://detect.roboflow.com/YOUR_MODEL/1?api_key=YOUR_KEY", {
+      method: "POST",
+      body: fileBytes,
+      headers: {
+        "Content-Type": "application/octet-stream"
+      }
+    });
 
-// CETAK RAW RESPONSE SEBELUM PARSING
-console.log("===== RAW RESPONSE ROBOFLOW =====");
-console.log(txt);
-console.log("=================================");
+    const roboflowJson = await roboflowRes.json();
+    console.log("Roboflow response:", roboflowJson);
 
-// Jika respon kosong / bukan JSON sama sekali
-if (!txt || txt.trim() === "") {
-  console.error("Roboflow mengirim respon kosong");
-  return new Response(JSON.stringify({
-    error: "Roboflow kosong",
-    detail: txt
-  }), { status: 500 });
-}
+    return new Response(JSON.stringify(roboflowJson), {
+      headers: { "Content-Type": "application/json" }
+    });
 
-// Jika Roboflow memberi HTML error (sering terjadi)
-if (txt.trim().startsWith("<")) {
-  console.error("Roboflow kirim HTML error, bukan JSON:", txt);
-  return new Response(JSON.stringify({
-    error: "Roboflow HTML error",
-    detail: txt
-  }), { status: 500 });
-}
-
-// Jika OK, baru parsing
-let roboflowData;
-try {
-  roboflowData = JSON.parse(txt);
-} catch (e) {
-  console.error("GAGAL PARSE JSON:", txt);
-  return new Response(JSON.stringify({
-    error: "JSON parse error",
-    detail: txt
-  }), { status: 500 });
-}
-
-      
-      await fetch(FIREBASE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          detection: roboflowData,
-          timestamp: Date.now(),
-        }),
-      });
-
-      return new Response(
-        JSON.stringify({ success: true, roboflowData }),
-        { headers: { "Content-Type": "application/json" } },
-      );
-    } catch (err) {
-      console.error("Error di /api/detect:", err);
-      return new Response(
-        JSON.stringify({ error: String(err) }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
-      );
-    }
+  } catch (err) {
+    console.error("Error in /api/detect:", err);
+    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
   }
+}
+
 
   // fallback 404
   return new Response("404 Not Found", { status: 404 });
