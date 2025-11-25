@@ -218,5 +218,5 @@ if (req.method === "POST" && url.pathname === "/api/detect") {
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }
-}
+
 
