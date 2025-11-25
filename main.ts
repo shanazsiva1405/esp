@@ -61,25 +61,33 @@ async function uploadToCloudinary(imageBuffer: Uint8Array): Promise<string> {
 // Helper: panggil Roboflow pakai buffer image
 async function detectWithRoboflow(imageBuffer: Uint8Array) {
   const url =
-    `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}?api_key=${ROBOFLOW_API_KEY}&format=json`;
+    `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
+    `?api_key=${ROBOFLOW_API_KEY}&format=json`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded", // sesuai doc Roboflow untuk binary
-    },
+    // Coba tanpa header dulu, kalau mau pakai:
+    // headers: { "Content-Type": "application/octet-stream" },
     body: imageBuffer,
   });
 
+  const txt = await res.text();
+  console.log("Roboflow raw response:", txt);
+
   if (!res.ok) {
-    const txt = await res.text();
     console.error("Roboflow error:", txt);
     throw new Error("Gagal deteksi di Roboflow");
   }
 
-  const data = await res.json();
-  return data;
+  try {
+    const data = JSON.parse(txt);
+    return data;
+  } catch (_e) {
+    console.error("Gagal parse JSON Roboflow:", txt);
+    throw new Error("Response Roboflow bukan JSON valid");
+  }
 }
+
 
 // (opsional) kalau kamu mau minta Roboflow balikin gambar yang sudah dibox,
 // biasanya endpoint-nya pakai format=image, tapi seringnya dari URL.
