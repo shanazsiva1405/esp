@@ -170,16 +170,21 @@ if (req.method === "POST" && url.pathname === "/api/detect") {
     console.log("Received file from ESP32:", file.name, "size:", fileBytes.length);
 
     // upload ke Roboflow
-    const roboflowRes = await fetch("https://detect.roboflow.com/YOUR_MODEL/1?api_key=YOUR_KEY", {
-      method: "POST",
-      body: fileBytes,
-      headers: {
-        "Content-Type": "application/octet-stream"
-      }
-    });
+    // Upload ke Roboflow
+const roboflowRes = await fetch(
+  "https://detect.roboflow.com/YOUR_MODEL/1?api_key=YOUR_KEY",
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+    },
+    body: fileBytes,
+  }
+);
 
-    const roboflowJson = await roboflowRes.json();
-    console.log("Roboflow response:", roboflowJson);
+const roboflowJson = await roboflowRes.json();
+console.log("Roboflow response:", roboflowJson);
+
 
     return new Response(JSON.stringify(roboflowJson), {
       headers: { "Content-Type": "application/json" }
