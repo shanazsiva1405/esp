@@ -65,29 +65,34 @@ async function detectWithRoboflow(imageBuffer: Uint8Array) {
 
   const res = await fetch(url, {
     method: "POST",
-    // banyak contoh Roboflow pakai application/octet-stream atau tanpa header
-    headers: {
-      "Content-Type": "application/octet-stream",
-    },
+    headers: { "Content-Type": "application/octet-stream" },
     body: imageBuffer,
   });
 
   const txt = await res.text();
   console.log("Roboflow raw response:", txt);
 
+  // Cek dulu apakah kemungkinan besar JSON (misal diawali `{` atau `[`)
+  const trimmed = txt.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    console.error("Respon Roboflow bukan JSON:", txt);
+    throw new Error("Response Roboflow bukan JSON");
+  }
+
   if (!res.ok) {
-    console.error("Roboflow error:", txt);
+    console.error("Roboflow error status:", res.status, txt);
     throw new Error("Gagal deteksi di Roboflow");
   }
 
   try {
-    const data = JSON.parse(txt);
+    const data = JSON.parse(trimmed);
     return data;
-  } catch (_e) {
+  } catch (e) {
     console.error("Gagal parse JSON Roboflow:", txt);
     throw new Error("Response Roboflow bukan JSON valid");
   }
 }
+
 
 // ========= HTTP Server =========
 Deno.serve(async (req) => {
