@@ -13,160 +13,134 @@ const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset";
 
 
 ///////////////////////////////////////////////////////////////
-// Fetch JSON prediction from Roboflow
+// Ambil ANNOTATED IMAGE dari Roboflow (format=image)
+///////////////////////////////////////////////////////////////
+async function getAnnotatedImage(imageUrl: string) {
+  const url =
+    `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
+    `?api_key=${ROBOFLOW_API_KEY}` +
+    `&image=${encodeURIComponent(imageUrl)}` +
+    `&format=image`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Gagal mengambil annotated image");
+
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+
+///////////////////////////////////////////////////////////////
+// Ambil JSON PREDICTION dari Roboflow
 ///////////////////////////////////////////////////////////////
 async function getPredictionJSON(imageUrl: string) {
-  const detectUrl =
+  const url =
     `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
     `?api_key=${ROBOFLOW_API_KEY}` +
     `&image=${encodeURIComponent(imageUrl)}`;
 
-  const res = await fetch(detectUrl);
-  const txt = await res.text();
+  const res = await fetch(url);
+  const text = await res.text();
 
-  if (!res.ok) throw new Error("Roboflow JSON error: " + txt);
+  if (!res.ok) throw new Error("Gagal ambil JSON Roboflow: " + text);
 
-  return JSON.parse(txt);
+  return JSON.parse(text);
 }
 
 
 ///////////////////////////////////////////////////////////////
-// Upload original ESP32 image to Cloudinary
+// UPLOAD gambar annotated ke Cloudinary
 ///////////////////////////////////////////////////////////////
-async function uploadOriginalToCloudinary(imageUrl: string): Promise<string> {
-  const res = await fetch(imageUrl);
-  const blob = await res.blob();
-
+async function uploadAnnotatedToCloudinary(buffer: Uint8Array) {
   const form = new FormData();
-  form.append("file", blob, "source.jpg");
+  form.append("file", new Blob([buffer], { type: "image/jpeg" }));
   form.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
 
-  const uploadRes = await fetch(
+  const upload = await fetch(
     `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`,
-    { method: "POST", body: form },
+    { method: "POST", body: form }
   );
 
-  const json = await uploadRes.json();
+  const json = await upload.json();
+  if (!upload.ok) throw new Error("Cloudinary upload error: " + JSON.stringify(json));
 
-  if (!uploadRes.ok) {
-    throw new Error("Upload original error: " + JSON.stringify(json));
-  }
-
-  return json.public_id;
+  return json.secure_url;
 }
 
 
 ///////////////////////////////////////////////////////////////
-// Generate Cloudinary annotated overlay URL
-///////////////////////////////////////////////////////////////
-function buildAnnotatedTransformation(publicId: string, predictions: any[]) {
-  const parts: string[] = [];
-
-  for (const p of predictions) {
-    // hitung kiri atas bbox
-    let x = Math.round(p.x - p.width / 2);
-    let y = Math.round(p.y - p.height / 2);
-
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-
-    // Box
-    parts.push(
-      `e_draw:rectangle,co_rgb:00FF00,w_${p.width},h_${p.height},x_${x},y_${y}`,
-    );
-
-    // Confidence text (encode %)
-    const conf = encodeURIComponent(`${Math.round(p.confidence * 100)}%`);
-
-    parts.push(
-      `l_text:Arial_30_bold:${conf},co_rgb:00FF00,g_north_west,x_${x},y_${y - 10}`,
-    );
-  }
-
-  const transform = parts.join("/");
-
-  return `https://res.cloudinary.com/${CLOUDINARY_CLOUD}` +
-    `/image/upload/${transform}/${publicId}.jpg`;
-}
-
-
-///////////////////////////////////////////////////////////////
-// Save to Firebase
+// SIMPAN KE FIREBASE
 ///////////////////////////////////////////////////////////////
 async function saveToFirebase(data: any) {
   await fetch(FIREBASE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+    body: JSON.stringify(data)
   });
 }
 
 
 ///////////////////////////////////////////////////////////////
-// SERVER ROUTES
+// SERVER UTAMA
 ///////////////////////////////////////////////////////////////
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
-  // Root test route
-  if (req.method === "GET" && url.pathname === "/") {
-    return new Response(
-      JSON.stringify({ status: "OK", msg: "Deno Deploy Running" }),
-      { headers: { "Content-Type": "application/json" } },
-    );
+  if (req.method === "GET") {
+    return new Response(JSON.stringify({ status: "OK" }));
   }
 
-  // Main detection route
   if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
-      const body = JSON.parse(await req.text());
-      const { imageUrl } = body;
+      const { imageUrl } = JSON.parse(await req.text());
 
-      if (!imageUrl) {
-        return new Response(
-          JSON.stringify({ error: "imageUrl diperlukan" }),
-          { status: 400 },
-        );
-      }
+      if (!imageUrl)
+        return new Response(JSON.stringify({ error: "imageUrl diperlukan" }), {
+          status: 400,
+        });
 
-      console.log("📥 ESP32 image URL received:", imageUrl);
+      console.log("📥 Menerima gambar:", imageUrl);
 
-      // 1) Get prediction JSON from Roboflow
+      // 1) Ambil JSON prediksi
       const prediction = await getPredictionJSON(imageUrl);
       const predictions = prediction.predictions ?? [];
 
-      // 2) Count detected larva
+      // Hitung jumlah jentik
       const jumlahJentik = predictions.length;
 
-      // 3) Upload original image to Cloudinary
-      const publicId = await uploadOriginalToCloudinary(imageUrl);
+      // Ambil confidence list
+      const confidenceList = predictions.map((p: any) =>
+        Number((p.confidence * 100).toFixed(2))
+      );
 
-      // 4) Build annotated overlay URL
-      const annotatedUrl = buildAnnotatedTransformation(publicId, predictions);
+      // 2) Ambil annotated image (dari Roboflow)
+      const annotatedBuffer = await getAnnotatedImage(imageUrl);
 
-      // 5) Save to Firebase
-      const data = {
+      // 3) Upload annotated ke Cloudinary
+      const annotatedUrl = await uploadAnnotatedToCloudinary(annotatedBuffer);
+
+      // 4) Data yang disimpan ke Firebase
+      const savedData = {
         originalImageUrl: imageUrl,
         annotatedImageUrl: annotatedUrl,
-        predictions,
         jumlahJentik,
-        timestamp: Date.now(),
+        confidenceList,
+        predictions,
+        timestamp: Date.now()
       };
 
-      await saveToFirebase(data);
+      await saveToFirebase(savedData);
 
-      // 6) Return success response
-      return new Response(JSON.stringify({
-        success: true,
-        ...data,
-      }), { headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({ success: true, ...savedData }),
+        { headers: { "Content-Type": "application/json" } }
+      );
 
     } catch (err) {
       console.error("🔥 ERROR:", err);
-      return new Response(
-        JSON.stringify({ error: String(err) }),
-        { status: 500 },
-      );
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500,
+      });
     }
   }
 
