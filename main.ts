@@ -1,6 +1,6 @@
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 // CONFIG
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 const ROBOFLOW_API_KEY = "kgm9BwsfeNyUBPwSijfg";
 const ROBOFLOW_MODEL = "deteksi_jenttik-an9y5";
 const ROBOFLOW_VERSION = "1";
@@ -9,13 +9,12 @@ const FIREBASE_URL =
   "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
 const CLOUDINARY_CLOUD = "dnm25bwiu";
-const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset";
 
 
-//////////////////////////////////////////////////////////
-// GET JSON FROM ROBOFLOW
-//////////////////////////////////////////////////////////
-async function getPredictionJSON(imageUrl: string) {
+///////////////////////////////////////////////////////////////
+// GET ROBOFLOW JSON PREDICTIONS
+///////////////////////////////////////////////////////////////
+async function getPredictionJSON(imageUrl: string): Promise<any> {
   const detectUrl =
     `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
     `?api_key=${ROBOFLOW_API_KEY}` +
@@ -30,42 +29,47 @@ async function getPredictionJSON(imageUrl: string) {
 }
 
 
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 // GENERATE CLOUDINARY ANNOTATED URL
-//////////////////////////////////////////////////////////
-function generateCloudinaryAnnotatedUrl(
-  originalUrl: string,
-  predictions: any[],
-) {
-  let overlays: string[] = [];
+///////////////////////////////////////////////////////////////
+function generateCloudinaryAnnotatedUrl(originalUrl: string, predictions: any[]) {
+  const parts: string[] = [];
 
   for (const p of predictions) {
-    const x = Math.round(p.x - p.width / 2);
-    const y = Math.round(p.y - p.height / 2);
+    let x = Math.round(p.x - p.width / 2);
+    let y = Math.round(p.y - p.height / 2);
 
-    // 1) DRAW RECTANGLE BOX
-    overlays.push(
+    // Cloudinary tidak boleh menerima koordinat negatif
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    // RECTANGLE
+    parts.push(
       `e_draw:rectangle,co_rgb:00FF00,w_${p.width},h_${p.height},x_${x},y_${y}`,
     );
 
-    // 2) DRAW CONFIDENCE LABEL
-    const conf = Math.round(p.confidence * 100) + "%";
+    // CONFIDENCE TEXT (harus encode %)
+    const confText = encodeURIComponent(`${Math.round(p.confidence * 100)}%`);
 
-    overlays.push(
-      `l_text:Arial_30_bold:${conf},co_rgb:00FF00,g_north_west,x_${x},y_${y - 10}`,
+    parts.push(
+      `l_text:Arial_30_bold:${confText},co_rgb:00FF00,g_north_west,x_${x},y_${y - 10}`,
     );
   }
 
-  const transformation = overlays.join("/");
+  // gabungkan dengan slash
+  const transformation = parts.join("/");
 
-  // Gunakan Cloudinary fetch URL
-  return `https://res.cloudinary.com/${CLOUDINARY_CLOUD}/image/fetch/${transformation}/${encodeURIComponent(originalUrl)}`;
+  // Buat Cloudinary fetch URL final
+  const cloudinaryUrl =
+    `https://res.cloudinary.com/${CLOUDINARY_CLOUD}/image/fetch/${transformation}/${encodeURIComponent(originalUrl)}`;
+
+  return cloudinaryUrl;
 }
 
 
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 // SAVE TO FIREBASE
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 async function saveToFirebase(data: any) {
   await fetch(FIREBASE_URL, {
     method: "POST",
@@ -75,45 +79,46 @@ async function saveToFirebase(data: any) {
 }
 
 
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 // SERVER
-//////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
-  // Root
+  // ROOT
   if (req.method === "GET" && url.pathname === "/") {
     return new Response(
-      JSON.stringify({ status: "OK", message: "Deno Deploy Running" }),
+      JSON.stringify({ status: "OK", message: "Deno Server Running" }),
       { headers: { "Content-Type": "application/json" } },
     );
   }
 
-  // Main detection API
+  // API /api/detect
   if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
       const body = JSON.parse(await req.text());
       const { imageUrl } = body;
 
       if (!imageUrl) {
-        return new Response(
-          JSON.stringify({ error: "imageUrl tidak ditemukan" }),
-          { status: 400 },
-        );
+        return new Response(JSON.stringify({ error: "imageUrl diperlukan" }), {
+          status: 400,
+        });
       }
 
-      // 1) Ambil JSON prediksi
-      const predictionJson = await getPredictionJSON(imageUrl);
-      const predictions = predictionJson.predictions ?? [];
+      console.log("📥 Received:", imageUrl);
 
-      // 2) Hitung jumlah jentik
+      // 1) Fetch prediction JSON
+      const prediction = await getPredictionJSON(imageUrl);
+      const predictions = prediction.predictions ?? [];
+
+      // 2) Hitung jentik otomatis
       const jumlahJentik = predictions.length;
 
-      // 3) Generate Cloudinary annotated URL
+      // 3) Generate annotated Cloudinary URL
       const annotatedUrl = generateCloudinaryAnnotatedUrl(imageUrl, predictions);
 
-      // 4) Simpan ke Firebase
-      const dataToSave = {
+      // 4) Save to Firebase
+      const savedData = {
         originalImageUrl: imageUrl,
         annotatedImageUrl: annotatedUrl,
         predictions,
@@ -121,12 +126,12 @@ Deno.serve(async (req) => {
         timestamp: Date.now(),
       };
 
-      await saveToFirebase(dataToSave);
+      await saveToFirebase(savedData);
 
-      // 5) Response
+      // 5) Return response
       return new Response(JSON.stringify({
         success: true,
-        ...dataToSave,
+        ...savedData,
       }), { headers: { "Content-Type": "application/json" } });
 
     } catch (err) {
