@@ -9,12 +9,13 @@ const FIREBASE_URL =
   "https://siling-ai-default-rtdb.asia-southeast1.firebasedatabase.app/detections.json";
 
 const CLOUDINARY_CLOUD = "dnm25bwiu";
+const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset";
 
 
 ///////////////////////////////////////////////////////////////
-// GET ROBOFLOW JSON PREDICTIONS
+// Fetch JSON prediction from Roboflow
 ///////////////////////////////////////////////////////////////
-async function getPredictionJSON(imageUrl: string): Promise<any> {
+async function getPredictionJSON(imageUrl: string) {
   const detectUrl =
     `https://detect.roboflow.com/${ROBOFLOW_MODEL}/${ROBOFLOW_VERSION}` +
     `?api_key=${ROBOFLOW_API_KEY}` +
@@ -23,52 +24,74 @@ async function getPredictionJSON(imageUrl: string): Promise<any> {
   const res = await fetch(detectUrl);
   const txt = await res.text();
 
-  if (!res.ok) throw new Error("Gagal mengambil JSON dari Roboflow: " + txt);
+  if (!res.ok) throw new Error("Roboflow JSON error: " + txt);
 
   return JSON.parse(txt);
 }
 
 
 ///////////////////////////////////////////////////////////////
-// GENERATE CLOUDINARY ANNOTATED URL
+// Upload original ESP32 image to Cloudinary
 ///////////////////////////////////////////////////////////////
-function generateCloudinaryAnnotatedUrl(originalUrl: string, predictions: any[]) {
-  const parts: string[] = [];
+async function uploadOriginalToCloudinary(imageUrl: string): Promise<string> {
+  const res = await fetch(imageUrl);
+  const blob = await res.blob();
 
-  for (const p of predictions) {
-    let x = Math.round(p.x - p.width / 2);
-    let y = Math.round(p.y - p.height / 2);
+  const form = new FormData();
+  form.append("file", blob, "source.jpg");
+  form.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
 
-    // Cloudinary tidak boleh menerima koordinat negatif
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
+  const uploadRes = await fetch(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`,
+    { method: "POST", body: form },
+  );
 
-    // RECTANGLE
-    parts.push(
-      `e_draw:rectangle,co_rgb:00FF00,w_${p.width},h_${p.height},x_${x},y_${y}`,
-    );
+  const json = await uploadRes.json();
 
-    // CONFIDENCE TEXT (harus encode %)
-    const confText = encodeURIComponent(`${Math.round(p.confidence * 100)}%`);
-
-    parts.push(
-      `l_text:Arial_30_bold:${confText},co_rgb:00FF00,g_north_west,x_${x},y_${y - 10}`,
-    );
+  if (!uploadRes.ok) {
+    throw new Error("Upload original error: " + JSON.stringify(json));
   }
 
-  // gabungkan dengan slash
-  const transformation = parts.join("/");
-
-  // Buat Cloudinary fetch URL final
-  const cloudinaryUrl =
-    `https://res.cloudinary.com/${CLOUDINARY_CLOUD}/image/fetch/${transformation}/${encodeURIComponent(originalUrl)}`;
-
-  return cloudinaryUrl;
+  return json.public_id;
 }
 
 
 ///////////////////////////////////////////////////////////////
-// SAVE TO FIREBASE
+// Generate Cloudinary annotated overlay URL
+///////////////////////////////////////////////////////////////
+function buildAnnotatedTransformation(publicId: string, predictions: any[]) {
+  const parts: string[] = [];
+
+  for (const p of predictions) {
+    // hitung kiri atas bbox
+    let x = Math.round(p.x - p.width / 2);
+    let y = Math.round(p.y - p.height / 2);
+
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    // Box
+    parts.push(
+      `e_draw:rectangle,co_rgb:00FF00,w_${p.width},h_${p.height},x_${x},y_${y}`,
+    );
+
+    // Confidence text (encode %)
+    const conf = encodeURIComponent(`${Math.round(p.confidence * 100)}%`);
+
+    parts.push(
+      `l_text:Arial_30_bold:${conf},co_rgb:00FF00,g_north_west,x_${x},y_${y - 10}`,
+    );
+  }
+
+  const transform = parts.join("/");
+
+  return `https://res.cloudinary.com/${CLOUDINARY_CLOUD}` +
+    `/image/upload/${transform}/${publicId}.jpg`;
+}
+
+
+///////////////////////////////////////////////////////////////
+// Save to Firebase
 ///////////////////////////////////////////////////////////////
 async function saveToFirebase(data: any) {
   await fetch(FIREBASE_URL, {
@@ -80,45 +103,49 @@ async function saveToFirebase(data: any) {
 
 
 ///////////////////////////////////////////////////////////////
-// SERVER
+// SERVER ROUTES
 ///////////////////////////////////////////////////////////////
 Deno.serve(async (req) => {
   const url = new URL(req.url);
 
-  // ROOT
+  // Root test route
   if (req.method === "GET" && url.pathname === "/") {
     return new Response(
-      JSON.stringify({ status: "OK", message: "Deno Server Running" }),
+      JSON.stringify({ status: "OK", msg: "Deno Deploy Running" }),
       { headers: { "Content-Type": "application/json" } },
     );
   }
 
-  // API /api/detect
+  // Main detection route
   if (req.method === "POST" && url.pathname === "/api/detect") {
     try {
       const body = JSON.parse(await req.text());
       const { imageUrl } = body;
 
       if (!imageUrl) {
-        return new Response(JSON.stringify({ error: "imageUrl diperlukan" }), {
-          status: 400,
-        });
+        return new Response(
+          JSON.stringify({ error: "imageUrl diperlukan" }),
+          { status: 400 },
+        );
       }
 
-      console.log("📥 Received:", imageUrl);
+      console.log("📥 ESP32 image URL received:", imageUrl);
 
-      // 1) Fetch prediction JSON
+      // 1) Get prediction JSON from Roboflow
       const prediction = await getPredictionJSON(imageUrl);
       const predictions = prediction.predictions ?? [];
 
-      // 2) Hitung jentik otomatis
+      // 2) Count detected larva
       const jumlahJentik = predictions.length;
 
-      // 3) Generate annotated Cloudinary URL
-      const annotatedUrl = generateCloudinaryAnnotatedUrl(imageUrl, predictions);
+      // 3) Upload original image to Cloudinary
+      const publicId = await uploadOriginalToCloudinary(imageUrl);
 
-      // 4) Save to Firebase
-      const savedData = {
+      // 4) Build annotated overlay URL
+      const annotatedUrl = buildAnnotatedTransformation(publicId, predictions);
+
+      // 5) Save to Firebase
+      const data = {
         originalImageUrl: imageUrl,
         annotatedImageUrl: annotatedUrl,
         predictions,
@@ -126,12 +153,12 @@ Deno.serve(async (req) => {
         timestamp: Date.now(),
       };
 
-      await saveToFirebase(savedData);
+      await saveToFirebase(data);
 
-      // 5) Return response
+      // 6) Return success response
       return new Response(JSON.stringify({
         success: true,
-        ...savedData,
+        ...data,
       }), { headers: { "Content-Type": "application/json" } });
 
     } catch (err) {
